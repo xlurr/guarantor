@@ -1,0 +1,41 @@
+
+services:
+  postgres:
+    image: postgres:15  # НЕ alpine! Полный образ
+    container_name: postgres_garant
+    environment:
+      POSTGRES_DB: garant_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin123
+      PGTZ: UTC  # Дефолтная таймзона
+    command: 
+      - "postgres"
+      - "-c"
+      - "timezone=UTC"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - garant_network
+    restart: unless-stopped
+
+
+  bot:
+    build: ./bot
+    container_name: garant_bot
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+    networks:
+      - garant_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:  # Использует существующий volume
+
+networks:
+  garant_network:
+    driver: bridge
