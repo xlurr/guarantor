@@ -270,7 +270,10 @@ async def admin_confirm_payment(callback: CallbackQuery):
     buyer = get_user_by_id(deal['buyer_id'])
     seller = get_user_by_id(deal['seller_id'])
     
-    # Уведомляем покупателя
+    # НОВОЕ: Импортируем клавиатуру
+    from keyboards.inline import buyer_confirm_delivery_keyboard
+    
+    # Уведомляем покупателя С КНОПКОЙ
     try:
         await callback.bot.send_message(
             chat_id=buyer['telegram_id'],
@@ -279,9 +282,11 @@ async def admin_confirm_payment(callback: CallbackQuery):
                 f"Сделка: #{deal_id}\n"
                 f"Сумма: {deal['amount']} {deal['currency']}\n\n"
                 f"Администратор проверил перевод.\n"
-                f"Ожидайте отправки товара от продавца."
+                f"Ожидайте отправки товара от продавца.\n\n"
+                f"После получения товара нажмите кнопку ниже:"
             ),
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=buyer_confirm_delivery_keyboard(deal_id)  # НОВАЯ КНОПКА
         )
     except Exception as e:
         logger.error(f"Failed to notify buyer: {e}")
@@ -311,6 +316,7 @@ async def admin_confirm_payment(callback: CallbackQuery):
     )
     
     logger.info(f"Admin {callback.from_user.id} confirmed deal {deal_id}")
+
 
 @router.callback_query(F.data.startswith("admin_reject:"))
 async def admin_reject_payment(callback: CallbackQuery):

@@ -71,3 +71,9 @@ def admin_confirmation_keyboard(deal_id: int):
         [InlineKeyboardButton(text="✅ Подтвердить перевод", callback_data=f"admin_confirm:{deal_id}")],
         [InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_reject:{deal_id}")]
     ])
+
+def buyer_confirm_delivery_keyboard(deal_id: int):
+    """Кнопка подтверждения получения товара для покупателя"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Подтвердить получение товара", callback_data=f"confirm_received:{deal_id}")]
+    ])

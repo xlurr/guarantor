@@ -291,3 +291,62 @@ async def payment_sent(callback: CallbackQuery):
         f"⏳ Ожидайте проверки перевода..."
     )
     await callback.answer("Заявка отправлена на проверку")
+
+
+# Обработчик: покупатель подтвердил получение товара
+@router.callback_query(F.data.startswith("confirm_received:"))
+async def buyer_confirm_received(callback: CallbackQuery):
+    """Покупатель подтвердил получение товара"""
+    deal_id = int(callback.data.split(":")[1])
+    deal = get_deal_by_id(deal_id)
+    
+    if not deal:
+        await callback.answer("Сделка не найдена", show_alert=True)
+        return
+    
+    user = get_or_create_user(callback.from_user.id, callback.from_user.username or "Без username", callback.from_user.full_name)
+    
+    # Проверяем, что это покупатель
+    if user['user_id'] != deal['buyer_id']:
+        await callback.answer("Только покупатель может подтвердить получение", show_alert=True)
+        return
+    
+    # Проверяем статус сделки
+    if deal['status'] != 'payment_received':
+        await callback.answer("Сделка ещё не готова к подтверждению", show_alert=True)
+        return
+    
+    # Обновляем статус на "completed"
+    update_deal_status(deal_id, 'completed')
+    
+    # Получаем данные продавца
+    seller = get_user_by_id(deal['seller_id'])
+    
+    # Уведомляем продавца
+    try:
+        await callback.bot.send_message(
+            chat_id=seller['telegram_id'],
+            text=(
+                f"🎉 <b>Покупатель подтвердил получение!</b>\n\n"
+                f"Сделка: #{deal_id}\n"
+                f"Сумма: <b>{deal['amount']} {deal['currency']}</b>\n\n"
+                f"Ожидайте поступления средств на ваш кошелёк."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify seller: {e}")
+    
+    # Уведомляем покупателя
+    await callback.message.edit_text(
+        f"✅ <b>Получение подтверждено!</b>\n\n"
+        f"Сделка: #{deal_id}\n"
+        f"Сумма: {deal['amount']} {deal['currency']}\n\n"
+        f"🎉 Сделка успешно завершена!\n"
+        f"Спасибо за использование сервиса.",
+        parse_mode="HTML"
+    )
+    
+    await callback.answer("✅ Сделка завершена")
+    
+    logger.info(f"Deal {deal_id} completed by buyer {user['user_id']}")
