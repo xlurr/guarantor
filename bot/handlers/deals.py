@@ -1,17 +1,22 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from datetime import datetime, timedelta
-from keyboards.inline import deal_type_choice, currency_choice, confirm_deal_creation, deal_actions, main_menu
+from keyboards.inline import (deal_type_choice, currency_choice, confirm_deal_creation, 
+                              deal_actions, main_menu, payment_confirmation_keyboard, 
+                              admin_confirmation_keyboard)
 from database import (get_or_create_user, get_user_by_id, create_deal, 
     confirm_deal_creation as db_confirm_creation, cancel_deal, 
     confirm_delivery, get_user_deals, get_deal_by_id, update_deal_status)
 from states import DealCreation
 from config import DEAL_EXPIRY_HOURS, ADMIN_ID
 import logging
+from utils.document_generator import generate_seller_receipt, generate_buyer_receipt
+
 
 router = Router()
 logger = logging.getLogger(__name__)
+
 
 @router.callback_query(F.data == "create_deal")
 async def start_deal_creation_callback(callback: CallbackQuery, state: FSMContext):
@@ -19,9 +24,11 @@ async def start_deal_creation_callback(callback: CallbackQuery, state: FSMContex
     await state.set_state(DealCreation.waiting_for_role)
     await callback.answer()
 
+
 async def start_deal_creation(message: Message, state: FSMContext):
     await message.answer("Кто вы в этой сделке?", reply_markup=deal_type_choice())
     await state.set_state(DealCreation.waiting_for_role)
+
 
 @router.callback_query(F.data.startswith("deal_role:"), DealCreation.waiting_for_role)
 async def choose_role(callback: CallbackQuery, state: FSMContext):
@@ -32,6 +39,7 @@ async def choose_role(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(f"Вы выбрали: {role_text}\n\nВаш ID: `{user['user_id']}`\n\nВведите ID второго участника сделки:", parse_mode="Markdown")
     await state.set_state(DealCreation.waiting_for_partner_id)
     await callback.answer()
+
 
 @router.message(DealCreation.waiting_for_partner_id)
 async def enter_partner_id(message: Message, state: FSMContext):
@@ -52,6 +60,7 @@ async def enter_partner_id(message: Message, state: FSMContext):
     await message.answer(f"✅ Партнёр найден: @{partner['username']}\n\nВведите сумму сделки:")
     await state.set_state(DealCreation.waiting_for_amount)
 
+
 @router.message(DealCreation.waiting_for_amount)
 async def enter_amount(message: Message, state: FSMContext):
     try:
@@ -64,6 +73,7 @@ async def enter_amount(message: Message, state: FSMContext):
     await state.update_data(amount=amount)
     await message.answer(f"💰 Сумма: {amount}\n\nВыберите валюту:", reply_markup=currency_choice())
     await state.set_state(DealCreation.waiting_for_currency)
+
 
 @router.callback_query(F.data.startswith("currency:"), DealCreation.waiting_for_currency)
 async def choose_currency(callback: CallbackQuery, state: FSMContext):
@@ -94,6 +104,7 @@ async def choose_currency(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer("Сделка создана!")
 
+
 @router.callback_query(F.data.startswith("confirm_creation:"))
 async def confirm_creation(callback: CallbackQuery):
     deal_id = int(callback.data.split(":")[1])
@@ -106,9 +117,6 @@ async def confirm_creation(callback: CallbackQuery):
     buyer = get_user_by_id(deal['buyer_id'])
     
     await callback.message.edit_text(f"✅ Вы подтвердили сделку #{deal_id}\n\nОжидайте оплату от покупателя...")
-    
-    # Добавляем кнопку "Я перевёл деньги"
-    from keyboards.inline import payment_confirmation_keyboard
     
     await callback.bot.send_message(
         chat_id=buyer['telegram_id'], 
@@ -124,6 +132,7 @@ async def confirm_creation(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @router.callback_query(F.data.startswith("reject_creation:"))
 async def reject_creation(callback: CallbackQuery):
     deal_id = int(callback.data.split(":")[1])
@@ -137,6 +146,7 @@ async def reject_creation(callback: CallbackQuery):
     buyer = get_user_by_id(deal['buyer_id'])
     await callback.bot.send_message(chat_id=buyer['telegram_id'], text=f"❌ Сделка #{deal_id} отклонена")
     await callback.answer()
+
 
 @router.callback_query(F.data == "my_deals")
 async def show_my_deals_callback(callback: CallbackQuery):
@@ -177,6 +187,7 @@ async def show_my_deals_callback(callback: CallbackQuery):
     await callback.message.edit_text(text, reply_markup=main_menu(), parse_mode="HTML")
     await callback.answer()
 
+
 async def show_my_deals(message: Message):
     user = get_or_create_user(message.from_user.id, message.from_user.username or "Без username", message.from_user.full_name)
     deals = get_user_deals(user['user_id'])
@@ -213,6 +224,7 @@ async def show_my_deals(message: Message):
     
     await message.answer(text, parse_mode="HTML")
 
+
 @router.callback_query(F.data.startswith("confirm_delivery:"))
 async def confirm_delivery_callback(callback: CallbackQuery):
     deal_id = int(callback.data.split(":")[1])
@@ -233,6 +245,7 @@ async def confirm_delivery_callback(callback: CallbackQuery):
         await callback.message.edit_text(f"✅ Вы подтвердили получение по сделке #{deal_id}\n\nОжидаем подтверждения от второго участника...")
     await callback.answer()
 
+
 @router.callback_query(F.data.startswith("cancel_deal:"))
 async def cancel_deal_callback(callback: CallbackQuery):
     deal_id = int(callback.data.split(":")[1])
@@ -241,9 +254,10 @@ async def cancel_deal_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"❌ Сделка #{deal_id} отменена")
     await callback.answer()
 
-# Обработчик: покупатель нажал "Я перевёл деньги"
+
 @router.callback_query(F.data.startswith("payment_sent:"))
 async def payment_sent(callback: CallbackQuery):
+    """Покупатель нажал 'Я перевёл деньги'"""
     deal_id = int(callback.data.split(":")[1])
     deal = get_deal_by_id(deal_id)
     
@@ -257,18 +271,14 @@ async def payment_sent(callback: CallbackQuery):
         await callback.answer("Только покупатель может подтвердить оплату", show_alert=True)
         return
     
-    # Обновляем статус в БД
     update_deal_status(deal_id, 'awaiting_admin_confirmation')
-    
-    # Отправляем админу
-    from keyboards.inline import admin_confirmation_keyboard
     
     buyer = get_user_by_id(deal['buyer_id'])
     seller = get_user_by_id(deal['seller_id'])
     
     try:
         await callback.bot.send_message(
-            chat_id=ADMIN_ID,  # 757042486
+            chat_id=ADMIN_ID,
             text=(
                 f"💰 <b>Подтверждение перевода</b>\n\n"
                 f"🔢 Сделка: #{deal_id}\n"
@@ -293,10 +303,9 @@ async def payment_sent(callback: CallbackQuery):
     await callback.answer("Заявка отправлена на проверку")
 
 
-# Обработчик: покупатель подтвердил получение товара
 @router.callback_query(F.data.startswith("confirm_received:"))
 async def buyer_confirm_received(callback: CallbackQuery):
-    """Покупатель подтвердил получение товара"""
+    """Покупатель подтвердил получение товара и завершил сделку"""
     deal_id = int(callback.data.split(":")[1])
     deal = get_deal_by_id(deal_id)
     
@@ -306,47 +315,102 @@ async def buyer_confirm_received(callback: CallbackQuery):
     
     user = get_or_create_user(callback.from_user.id, callback.from_user.username or "Без username", callback.from_user.full_name)
     
-    # Проверяем, что это покупатель
     if user['user_id'] != deal['buyer_id']:
         await callback.answer("Только покупатель может подтвердить получение", show_alert=True)
         return
     
-    # Проверяем статус сделки
     if deal['status'] != 'payment_received':
         await callback.answer("Сделка ещё не готова к подтверждению", show_alert=True)
         return
     
-    # Обновляем статус на "completed"
     update_deal_status(deal_id, 'completed')
     
-    # Получаем данные продавца
     seller = get_user_by_id(deal['seller_id'])
+    buyer = get_user_by_id(deal['buyer_id'])
     
-    # Уведомляем продавца
+    # === ГЕНЕРИРУЕМ И ОТПРАВЛЯЕМ ДОКУМЕНТЫ ===
+    
     try:
-        await callback.bot.send_message(
+        # Генерируем PDF для продавца
+        seller_pdf_bytes = generate_seller_receipt(
+            deal_id=deal_id,
+            seller_username=seller['username'],
+            seller_id=seller['user_id'],
+            buyer_username=buyer['username'],
+            buyer_id=buyer['user_id'],
+            amount=deal['amount'],
+            currency=deal['currency'],
+            wallet_address=seller['wallet_ton'] if deal['currency'] == 'TON' else seller['wallet_btc']
+        )
+        
+        # Создаем файл для отправки
+        seller_file = BufferedInputFile(
+            file=seller_pdf_bytes,
+            filename=f"receipt_deal_{deal_id}_seller.pdf"
+        )
+        
+        # Отправляем продавцу
+        await callback.bot.send_document(
             chat_id=seller['telegram_id'],
-            text=(
+            document=seller_file,
+            caption=(
                 f"🎉 <b>Покупатель подтвердил получение!</b>\n\n"
                 f"Сделка: #{deal_id}\n"
                 f"Сумма: <b>{deal['amount']} {deal['currency']}</b>\n\n"
-                f"Ожидайте поступления средств на ваш кошелёк."
+                f"Приложенный документ подтверждает завершение сделки.\n"
+                f"Средства перечислены на ваш кошелёк."
             ),
             parse_mode="HTML"
         )
+        logger.info(f"Seller receipt sent for deal {deal_id}")
     except Exception as e:
-        logger.error(f"Failed to notify seller: {e}")
+        logger.error(f"Failed to send receipt to seller: {e}")
     
-    # Уведомляем покупателя
+    try:
+        # Генерируем PDF для покупателя
+        buyer_pdf_bytes = generate_buyer_receipt(
+            deal_id=deal_id,
+            buyer_username=buyer['username'],
+            buyer_id=buyer['user_id'],
+            seller_username=seller['username'],
+            seller_id=seller['user_id'],
+            amount=deal['amount'],
+            currency=deal['currency'],
+            seller_wallet=seller['wallet_ton'] if deal['currency'] == 'TON' else seller['wallet_btc']
+        )
+        
+        # Создаем файл для отправки
+        buyer_file = BufferedInputFile(
+            file=buyer_pdf_bytes,
+            filename=f"receipt_deal_{deal_id}_buyer.pdf"
+        )
+        
+        # Отправляем покупателю
+        await callback.message.answer_document(
+            document=buyer_file,
+            caption=(
+                f"🎉 <b>Сделка успешно завершена!</b>\n\n"
+                f"Сделка: #{deal_id}\n"
+                f"Сумма: <b>{deal['amount']} {deal['currency']}</b>\n\n"
+                f"Приложенный документ подтверждает завершение сделки.\n"
+                f"Спасибо за использование EasyGarante!"
+            ),
+            parse_mode="HTML"
+        )
+        logger.info(f"Buyer receipt sent for deal {deal_id}")
+    except Exception as e:
+        logger.error(f"Failed to send receipt to buyer: {e}")
+    
+    # Уведомление в основном чате
     await callback.message.edit_text(
         f"✅ <b>Получение подтверждено!</b>\n\n"
         f"Сделка: #{deal_id}\n"
         f"Сумма: {deal['amount']} {deal['currency']}\n\n"
         f"🎉 Сделка успешно завершена!\n"
-        f"Спасибо за использование сервиса.",
+        f"Документ отправлен вам отдельным сообщением.\n"
+        f"Спасибо за использование сервиса EasyGarante.",
         parse_mode="HTML"
     )
     
     await callback.answer("✅ Сделка завершена")
-    
     logger.info(f"Deal {deal_id} completed by buyer {user['user_id']}")
